@@ -1,5 +1,7 @@
-from PyQt5.QtCore import QAbstractTableModel, Qt
+from PyQt5.QtCore import QAbstractTableModel, Qt, QDir
 import pandas as pd
+from PyQt5.QtWidgets import QInputDialog, QLineEdit
+
 
 class DataFrameTableModel(QAbstractTableModel):
     def __init__(self, dataframe: pd.DataFrame):
@@ -28,4 +30,15 @@ class DataFrameTableModel(QAbstractTableModel):
                 return str(self._data.columns[section])
             elif orientation == Qt.Vertical:
                 return str(self._data.index[section])
+        return None
+
+    def gettimestamp(self) -> str:
+        timestamp: str = next((key for key in self._data.keys() if 'timestamp' in key or 'time' in key), None)
+        if timestamp is not None:
+            return timestamp
+        else:
+            timestamp, ok = QInputDialog().getText(self, title="Error getting timestamp label",
+                                          label= "Timestamp label:", echo=QLineEdit.Normal)
+        if ok and timestamp:
+            return timestamp
         return None
