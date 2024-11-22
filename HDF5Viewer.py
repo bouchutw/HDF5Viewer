@@ -83,7 +83,6 @@ class HDF5Viewer(QMainWindow):
         version_action = QAction(f"Version: v1.0.0", self)
         about_menu.addAction(version_action)
 
-
         # Open file if provided
         if filename:
             self.open_hdf5(filename)
