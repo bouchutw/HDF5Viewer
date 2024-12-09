@@ -1,55 +1,78 @@
-from typing import Dict
 import h5py
 import numpy as np
-import pandas as pd
+from typing import Dict, List
 
-
-def hdf5_to_dataframe(data_path: str) -> Dict[str, pd.DataFrame]:
+class HDF5Data:
     """
-    Decomposes an HDF5 file into a dictionary of DataFrames, one per group.
-
-    Args:
-        data_path (str): Path to the HDF5 file.
-
-    Returns:
-        Dict[str, pd.DataFrame]: A dictionary where keys are group names and values are DataFrames.
+    A class to encapsulate and interact with data loaded from an HDF5 file.
     """
-    group_dataframes = {}  # To store DataFrames with group names as keys
 
-    try:
-        # Open the HDF5 file in read mode
-        with h5py.File(data_path, 'r') as hdf:
-            print(f"Opened HDF5 file: {data_path}")
+    def __init__(self, filename = None):
+        """
+        Initialize the HDF5Data object by loading data from the given file.
 
-            # Recursive function to explore groups and datasets
-            def explore_group(group, prefix=""):
-                group_dict = {}  # Dictionary to collect data for this group
+        Args:
+            filename (str): Path to the HDF5 file.
+        """
+        self.filename = filename
+        if filename:
+            self.data = self._load_hdf5_data()
 
-                for key in group:
-                    item = group[key]
-                    if isinstance(item, h5py.Group):
-                        explore_group(item, prefix=f"{key}")  # Recursive exploration
-                    elif isinstance(item, h5py.Dataset):
-                        try:
-                            # Add dataset to group_dict
-                            group_dict[key] = np.array(item)
-                        except Exception as dataset_error:
-                            print(f"Error reading dataset {prefix}_{key}: {dataset_error}")
+    def _load_hdf5_data(self):
+        """Load data from the HDF5 file and store it as a nested dictionary."""
+        with h5py.File(self.filename, 'r') as h5file:
+            return self._load_group(h5file, '/')
 
-                # If the group has datasets, convert the dict to a DataFrame
-                if group_dict:
-                    try:
-                        df = pd.DataFrame(group_dict)
-                        group_dataframes[prefix] = df
-                        print(f"Created DataFrame for group: {prefix}")
-                    except Exception as dataframe_error:
-                        print(f"Error creating DataFrame for group {prefix}: {dataframe_error}")
+    def _load_group(self, h5file, path):
+        """Recursively load the contents of an HDF5 group into a dictionary."""
+        result = {}
+        for key, item in h5file[path].items():
+            if isinstance(item, h5py.Dataset):
+                result[key] = self._process_dataset(item)
+            elif isinstance(item, h5py.Group):
+                result[key] = self._load_group(h5file, f"{path}{key}/")
+            else:
+                raise TypeError(f"Unsupported HDF5 item type for key '{key}': {type(item)}")
+        return result
 
-            # Start exploring from the root
-            explore_group(hdf)
+    def _process_dataset(self, dataset):
+        """Process an HDF5 dataset into a Python-compatible object."""
+        if 'is_bytes' in dataset.attrs:
+            return dataset[()]
 
-        return group_dataframes
+        if h5py.check_string_dtype(dataset.dtype):
+            data = dataset[()]
+            if isinstance(data, np.ndarray):
+                return data.astype(str)  # Convert arrays of bytes to strings
+            if isinstance(data, bytes):
+                return data.decode('utf-8')  # Convert single byte string
+            return data
 
-    except Exception as e:
-        print(f"Error processing HDF5 file: {e}")
-        return group_dataframes
+        return dataset[()]  # Handle numeric datasets (scalars or arrays)
+
+    def get_data(self):
+        """Get the entire loaded data as a dictionary."""
+        return self.data
+
+    def get_by_key(self, key_path):
+        """
+        Get a specific item from the data using a dot-separated key path.
+
+        Args:
+            key_path (str): Dot-separated path to the desired item (e.g., "group1.dataset1").
+
+        Returns:
+            The requested data or None if the key path does not exist.
+        """
+        keys = key_path.split('.')
+        current = self.data
+        for key in keys:
+            if key in current:
+                current = current[key]
+            else:
+                return None
+        return current
+
+    def __repr__(self):
+        """Provide a string representation of the loaded data for debugging."""
+        return f"HDF5Data(filename='{self.filename}', data_keys={list(self.data.keys())})"

@@ -3,42 +3,41 @@ from typing import Dict
 import pandas as pd
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QWidget, QAction,
-    QComboBox, QMessageBox, QTableView, QHBoxLayout
+    QComboBox, QMessageBox, QTableView, QHBoxLayout, QTableWidgetItem
 )
 from PyQt5.QtWidgets import QSplitter
 from PyQt5.QtGui import QFont
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt import NavigationToolbar2QT
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from backend import HDF5DataLoader
+from backend.HDF5DataLoader import HDF5Data
 from frontend.TableGrid import DataFrameTableModel
 from PyQt5.QtCore import Qt
 import qt_material
+from frontend.DataTree import TreeWidget
+import numpy as np
 
 class HDF5Viewer(QMainWindow):
     def __init__(self, filename: str = None):
         super().__init__()
-        self.setGeometry(50, 50, 1600, 800)
+        self.setGeometry(50, 50, 1800, 900)
         self.setWindowTitle("HDF5 Viewer" if not filename else filename)
 
-        self.data: Dict[str, pd.DataFrame] = {}
+        #TODO: remove those variable since the tree widget will provide the data
+        self.data: HDF5Data = HDF5Data()
         self.dataFrame: pd.DataFrame = None
         self.timestamp_label: str = None
+        self.item = {}
 
-        # Top Layout: Dropdown Buttons
-        self.sheet_names_button = QComboBox()
-        self.sheet_names_button.currentTextChanged.connect(self.on_sheet_names_changed)
-        self.sheet_names_button.setFont(QFont("", 10))
+        # Left: Tree Layout
+        self.tree_layout = QVBoxLayout()
+        self.tree = TreeWidget()
+        self.tree_layout.addWidget(self.tree)
+        tree_widget = QWidget()
+        tree_widget.setLayout(self.tree_layout)
+        self.tree.itemClickedSignal.connect(self.update_content)
 
-        self.variable_names_button = QComboBox()
-        self.variable_names_button.currentTextChanged.connect(self.on_variable_names_changed)
-        self.variable_names_button.setFont(QFont("", 10))
-
-        top_layout = QHBoxLayout()
-        top_layout.addWidget(self.sheet_names_button)
-        top_layout.addWidget(self.variable_names_button)
-
-        # Left: Table Layout
+        # Middle: Table Layout
         self.table_layout = QVBoxLayout()
         self.table = QTableView()
         self.table_layout.addWidget(self.table)
@@ -46,10 +45,15 @@ class HDF5Viewer(QMainWindow):
         table_widget.setLayout(self.table_layout)
 
         # Right: Graph Layout with Toolbar
+        self.variable_names_button = QComboBox()
+        self.variable_names_button.currentTextChanged.connect(self.on_variable_names_changed)
+        self.variable_names_button.setFont(QFont("", 10))
+
         self.figure = plt.Figure(figsize=(8, 6))
         self.canvas = FigureCanvas(self.figure)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         graph_layout = QVBoxLayout()
+        graph_layout.addWidget(self.variable_names_button)
         graph_layout.addWidget(self.canvas)
         graph_layout.addWidget(self.toolbar)
         graph_widget = QWidget()
@@ -59,12 +63,12 @@ class HDF5Viewer(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(table_widget)
         splitter.addWidget(graph_widget)
-        splitter.setSizes([900, 600])  # Initial sizes: Table 700px, Graph 900px
+        splitter.setSizes([900, 600])
 
         # Main Layout: Top + Splitter
-        main_layout = QVBoxLayout()
-        main_layout.addLayout(top_layout)  # Top layout for dropdown buttons
-        main_layout.addWidget(splitter)  # Splitter for resizable central area
+        main_layout = QHBoxLayout()
+        main_layout.addWidget(tree_widget)
+        main_layout.addWidget(splitter)
 
         # Central Widget
         central_widget = QWidget()
@@ -115,43 +119,20 @@ class HDF5Viewer(QMainWindow):
 
     def load_data(self, file_path):
         try:
-            # Load data synchronously
-            data = HDF5DataLoader.hdf5_to_dataframe(file_path)
-            self.data = data
-            self.sheet_names_button.clear()
-            sheet_names = list(data.keys())
-            if sheet_names:
-                self.sheet_names_button.addItems(sheet_names)
-                self.sheet_names_button.setCurrentText(sheet_names[0])
-                self.dataFrame = data[sheet_names[0]]
-                self.fill_table()
-                variable_names = list(self.dataFrame.keys())
-                self.variable_names_button.clear()
-                self.variable_names_button.addItems(variable_names)
-                self.variable_names_button.setCurrentText(variable_names[0])
-                self.update_plot()
+            # self.table.reset()
+            self.data = HDF5Data(file_path)
+            self.tree.update_tree(self.data)
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load HDF5 file: {str(e)}")
 
     def fill_table(self):
         model = DataFrameTableModel(self.dataFrame)
-        self.timestamp_label = model.gettimestamp()
         self.table.setModel(model)
+        self.variable_names_button.clear()
+        self.variable_names_button.addItems(list(map(str, self.dataFrame.keys())))
+        self.update_plot()
 
-    def on_sheet_names_changed(self):
-        if self.data:
-            try:
-                selected_sheet = self.sheet_names_button.currentText()
-                self.dataFrame = self.data[selected_sheet]
-                self.fill_table()
-                variable_names = list(self.dataFrame.keys())
-                self.variable_names_button.clear()
-                self.variable_names_button.addItems(variable_names)
-                self.variable_names_button.setCurrentText(variable_names[0])
-                self.update_plot()
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Error changing sheet: {str(e)}")
 
     def on_variable_names_changed(self):
         if self.dataFrame is not None and not self.dataFrame.empty:
@@ -160,14 +141,13 @@ class HDF5Viewer(QMainWindow):
     def update_plot(self):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
-
         if self.dataFrame is not None and not self.dataFrame.empty:
             try:
-                ax.plot(self.dataFrame[self.timestamp_label],
-                        self.dataFrame[self.variable_names_button.currentText()],
-                        label='Data Plot')
-                ax.set_title("Plot of Data")
-                ax.set_xlabel(f"{self.timestamp_label}")
+                data = self.dataFrame[self.variable_names_button.currentText()]
+                ax.plot(np.range(len(data),
+                        data,
+                        label='Data Plot'))
+                ax.set_title(f"{self.item['Label']}")
                 ax.set_ylabel(f"{self.variable_names_button.currentText()}")
             except Exception as e:
                 pass
@@ -176,6 +156,18 @@ class HDF5Viewer(QMainWindow):
 
         # Redraw the canvas
         self.canvas.draw()
+
+    def update_content(self, item):
+        self.item = item
+        if item['Type'] != 'Group' and  item['Type'] != 'File':
+            try:
+                self.dataFrame = pd.DataFrame(item['data'])
+                self.fill_table()
+                self.update_plot()
+            except Exception as e:
+                print(e)
+
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

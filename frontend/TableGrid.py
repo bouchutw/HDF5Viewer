@@ -2,11 +2,18 @@ from PyQt5.QtCore import QAbstractTableModel, Qt, QDir
 import pandas as pd
 from PyQt5.QtWidgets import QInputDialog, QLineEdit
 
+def check_dataframe(func):
+    def wrapper(self, *args, **kwargs):
+        if self._data is None or self._data.empty:
+            raise Exception('dataframe is empty')
+        return func(self, *args, **kwargs)
+    return wrapper
 
 class DataFrameTableModel(QAbstractTableModel):
     def __init__(self, dataframe: pd.DataFrame):
         super().__init__()
         self._data = dataframe
+
 
     def rowCount(self, parent=None):
         return len(self._data)
@@ -32,13 +39,17 @@ class DataFrameTableModel(QAbstractTableModel):
                 return str(self._data.index[section])
         return None
 
+    @check_dataframe
     def gettimestamp(self) -> str:
-        timestamp: str = next((key for key in self._data.keys() if 'timestamp' in key or 'time' in key), None)
-        if timestamp is not None:
-            return timestamp
-        else:
-            timestamp, ok = QInputDialog().getText(self, title="Error getting timestamp label",
-                                          label= "Timestamp label:", echo=QLineEdit.Normal)
-        if ok and timestamp:
-            return timestamp
-        return None
+        try:
+            timestamp: str = next((key for key in self._data.keys() if 'timestamp' in key or 'time' in key), None)
+            if timestamp is not None:
+                return timestamp
+            else:
+                timestamp, ok = QInputDialog().getText(self, title="Error getting timestamp label",
+                                              label= "Timestamp label:", echo=QLineEdit.Normal)
+            if ok and timestamp:
+                return timestamp
+            return None
+        except Exception as e:
+            print("Problem getting timestamp label: \n", e)
