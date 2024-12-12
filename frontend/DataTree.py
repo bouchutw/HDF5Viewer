@@ -38,6 +38,10 @@ class TreeWidget(QTreeWidget):
         # Add the root item and populate the tree
         root_item = QTreeWidgetItem(self, [self.hdf5_data.filename, "File"])
         self._populate_tree_recursive(root_item, self.hdf5_data.get_data())
+        self.expandAll()
+        self.resizeColumnToContents(0)
+        self.resizeColumnToContents(1)
+
 
     def _populate_tree_recursive(self, parent_item, data):
         """Recursively add items to the QTreeWidget from the nested dictionary."""
@@ -87,6 +91,7 @@ class TreeWidget(QTreeWidget):
         self.populate_tree()
 
     def contextMenuEvent(self, event):
+
         """Override contextMenuEvent to show a custom right-click menu."""
         # Create a QMenu instance
         menu = QMenu(self)

@@ -16,6 +16,7 @@ from PyQt5.QtCore import Qt
 import qt_material
 from frontend.DataTree import TreeWidget
 import numpy as np
+from pyqtspinner import WaitingSpinner
 
 class HDF5Viewer(QMainWindow):
     def __init__(self, filename: str = None):
@@ -23,28 +24,19 @@ class HDF5Viewer(QMainWindow):
         self.setGeometry(50, 50, 1800, 900)
         self.setWindowTitle("HDF5 Viewer" if not filename else filename)
 
-        #TODO: remove those variable since the tree widget will provide the data
+        # Initialize data
         self.data: HDF5Data = HDF5Data()
         self.dataFrame: pd.DataFrame = None
-        self.timestamp_label: str = None
         self.item = {}
 
-        # Left: Tree Layout
-        self.tree_layout = QVBoxLayout()
+        # Tree Layout
         self.tree = TreeWidget()
-        self.tree_layout.addWidget(self.tree)
-        tree_widget = QWidget()
-        tree_widget.setLayout(self.tree_layout)
         self.tree.itemClickedSignal.connect(self.update_content)
 
-        # Middle: Table Layout
-        self.table_layout = QVBoxLayout()
+        # Table Layout
         self.table = QTableView()
-        self.table_layout.addWidget(self.table)
-        table_widget = QWidget()
-        table_widget.setLayout(self.table_layout)
 
-        # Right: Graph Layout with Toolbar
+        # Graph Layout with ComboBox for Variable Names
         self.variable_names_button = QComboBox()
         self.variable_names_button.currentTextChanged.connect(self.on_variable_names_changed)
         self.variable_names_button.setFont(QFont("", 10))
@@ -52,6 +44,18 @@ class HDF5Viewer(QMainWindow):
         self.figure = plt.Figure(figsize=(8, 6))
         self.canvas = FigureCanvas(self.figure)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
+
+        # Layouts
+        tree_layout = QVBoxLayout()
+        tree_layout.addWidget(self.tree)
+        tree_widget = QWidget()
+        tree_widget.setLayout(tree_layout)
+
+        table_layout = QVBoxLayout()
+        table_layout.addWidget(self.table)
+        table_widget = QWidget()
+        table_widget.setLayout(table_layout)
+
         graph_layout = QVBoxLayout()
         graph_layout.addWidget(self.variable_names_button)
         graph_layout.addWidget(self.canvas)
@@ -59,15 +63,14 @@ class HDF5Viewer(QMainWindow):
         graph_widget = QWidget()
         graph_widget.setLayout(graph_layout)
 
-        # Central Splitter: Resizable Table and Graph
+        # Splitter Layout: Resizable Tree, Table, Graph
         splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(tree_widget)
         splitter.addWidget(table_widget)
         splitter.addWidget(graph_widget)
-        splitter.setSizes([900, 600])
 
-        # Main Layout: Top + Splitter
-        main_layout = QHBoxLayout()
-        main_layout.addWidget(tree_widget)
+        # Main Layout
+        main_layout = QVBoxLayout()
         main_layout.addWidget(splitter)
 
         # Central Widget
@@ -118,21 +121,27 @@ class HDF5Viewer(QMainWindow):
             self.load_data(file_name)
 
     def load_data(self, file_path):
+        # self.spinner.start()
         try:
-            # self.table.reset()
+            self.table.setModel(None)
+            self.variable_names_button.clear()
+            self.figure.clear()
             self.data = HDF5Data(file_path)
             self.tree.update_tree(self.data)
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load HDF5 file: {str(e)}")
+        #
+        # finally:
+        #     self.spinner.stop()
 
     def fill_table(self):
         model = DataFrameTableModel(self.dataFrame)
         self.table.setModel(model)
+        self.table.resizeColumnsToContents()
         self.variable_names_button.clear()
         self.variable_names_button.addItems(list(map(str, self.dataFrame.keys())))
         self.update_plot()
-
 
     def on_variable_names_changed(self):
         if self.dataFrame is not None and not self.dataFrame.empty:
@@ -143,10 +152,10 @@ class HDF5Viewer(QMainWindow):
         ax = self.figure.add_subplot(111)
         if self.dataFrame is not None and not self.dataFrame.empty:
             try:
-                data = self.dataFrame[self.variable_names_button.currentText()]
-                ax.plot(np.range(len(data),
+                data = self.dataFrame.loc[:, self.variable_names_button.currentIndex()]
+                ax.plot(np.arange(len(data)),
                         data,
-                        label='Data Plot'))
+                        label='Data Plot')
                 ax.set_title(f"{self.item['Label']}")
                 ax.set_ylabel(f"{self.variable_names_button.currentText()}")
             except Exception as e:
@@ -159,14 +168,16 @@ class HDF5Viewer(QMainWindow):
 
     def update_content(self, item):
         self.item = item
-        if item['Type'] != 'Group' and  item['Type'] != 'File':
+        if item['Type'] != 'Group' and item['Type'] != 'File':
+            # self.spinner.start()
             try:
                 self.dataFrame = pd.DataFrame(item['data'])
                 self.fill_table()
                 self.update_plot()
             except Exception as e:
                 print(e)
-
+            # finally:
+            #     self.spinner.stop()
 
 
 if __name__ == '__main__':
@@ -181,6 +192,4 @@ if __name__ == '__main__':
         viewer = HDF5Viewer()
     qt_material.apply_stylesheet(app, theme='light_blue.xml')
     viewer.show()
-
-
     sys.exit(app.exec_())
