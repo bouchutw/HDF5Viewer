@@ -7,7 +7,6 @@ from PyQt5.QtWidgets import QTreeWidget, QTreeWidgetItem, QMenu, QAction
 class TreeWidget(QTreeWidget):
 
     itemClickedSignal = pyqtSignal(dict)
-    # timestampSelectedSignal = pyqtSignal(str)
 
     def __init__(self, hdf5_data=None):
         """
@@ -32,7 +31,6 @@ class TreeWidget(QTreeWidget):
         if not self.hdf5_data:
             return
 
-        # Clear the tree before populating it
         self.clear()
 
         # Add the root item and populate the tree
@@ -90,20 +88,16 @@ class TreeWidget(QTreeWidget):
         self.hdf5_data = hdf5_data
         self.populate_tree()
 
-    def contextMenuEvent(self, event):
-
-        """Override contextMenuEvent to show a custom right-click menu."""
-        # Create a QMenu instance
-        menu = QMenu(self)
-
-        # Get the item under the mouse cursor
-        item = self.itemAt(event.pos())
-
-        # Check if item was clicked
-        if item:
-            # Add actions to the menu
-            open_action = QAction("set as timestamp", self)
-            menu.addAsction(open_action)
-
-        # Show the menu
-        menu.exec_(event.globalPos())
+    #TODO: implement the right click option to signal the timestamp value
+    # def contextMenuEvent(self, event):
+    #     try:
+    #         """Override contextMenuEvent to show a custom right-click menu."""
+    #         menu = QMenu(self)
+    #         item = self.itemAt(event.pos())
+    #         if item:
+    #             # Add actions to the menu
+    #             open_action = QAction("set as timestamp", self)
+    #             menu.addAction(open_action)
+    #         menu.exec_(event.globalPos())
+    #     except Exception as e:
+    #         print(e)

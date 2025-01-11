@@ -1,6 +1,7 @@
 import h5py
 import numpy as np
 from typing import Dict, List
+import pandas as pd
 
 class HDF5Data:
     """
@@ -40,6 +41,11 @@ class HDF5Data:
         if 'is_bytes' in dataset.attrs:
             return dataset[()]
 
+        if 'columns' in dataset.attrs:
+            # Reconstruct DataFrame using stored column names
+            columns = dataset.attrs['columns']
+            return pd.DataFrame(dataset[()], columns=columns)
+
         if h5py.check_string_dtype(dataset.dtype):
             data = dataset[()]
             if isinstance(data, np.ndarray):
@@ -71,8 +77,48 @@ class HDF5Data:
                 current = current[key]
             else:
                 return None
+
+        # Return as a DataFrame if it's a DataFrame; otherwise, return as-is
+        if isinstance(current, pd.DataFrame):
+            return current
+        elif isinstance(current, np.ndarray):
+            # Reconstruct DataFrame if columns are available as attributes
+            with h5py.File(self.filename, 'r') as h5file:
+                dataset_path = '/' + '/'.join(keys)
+                if dataset_path in h5file and 'columns' in h5file[dataset_path].attrs:
+                    columns = h5file[dataset_path].attrs['columns']
+                    return pd.DataFrame(current, columns=columns)
+
         return current
 
     def __repr__(self):
         """Provide a string representation of the loaded data for debugging."""
         return f"HDF5Data(filename='{self.filename}', data_keys={list(self.data.keys())})"
+
+    def update_dataset(self, key_path: str, data: pd.DataFrame):
+        """
+        Update a specific dataset in the HDF5 file and in the in-memory data.
+
+        Args:
+            key_path (str): Dot-separated path to the dataset to update.
+            data (pd.DataFrame): The updated data to write back.
+
+        Raises:
+            KeyError: If the dataset path does not exist in the HDF5 file.
+        """
+        keys = key_path.split('.')
+        dataset_path = '/' + '/'.join(keys)
+
+        with h5py.File(self.filename, 'a') as h5file:
+            if dataset_path not in h5file:
+                raise KeyError(f"Dataset '{dataset_path}' not found in HDF5 file.")
+
+            del h5file[dataset_path]
+            h5file.create_dataset(dataset_path, data=data.to_numpy())
+
+            h5file[dataset_path].attrs['columns'] = data.columns.tolist()
+
+        current = self.data
+        for key in keys[:-1]:
+            current = current[key]
+        current[keys[-1]] = data
