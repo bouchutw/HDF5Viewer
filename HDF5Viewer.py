@@ -254,7 +254,7 @@ class HDF5Viewer(QMainWindow):
 
                 if reply == QMessageBox.Yes:
                     if hasattr(self, 'current_item') and self.current_item:
-                        key_path = self.current_item.get('KeyPath')
+                        key_path = self.current_item.get('Path')
                         if key_path and not self.dataFrame.empty:
                             self.data.update_dataset(key_path, self.dataFrame)
                     self.changes_made = False  # Reset changes flag

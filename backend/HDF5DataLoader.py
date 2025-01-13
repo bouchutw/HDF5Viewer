@@ -78,7 +78,6 @@ class HDF5Data:
             else:
                 return None
 
-        # Return as a DataFrame if it's a DataFrame; otherwise, return as-is
         if isinstance(current, pd.DataFrame):
             return current
         elif isinstance(current, np.ndarray):
