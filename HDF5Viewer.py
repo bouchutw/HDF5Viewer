@@ -18,7 +18,6 @@ import qt_material
 from frontend.DataTree import TreeWidget
 import numpy as np
 from pyqtspinner import WaitingSpinner
-from backend.utils import HDF5DataLoaderThread
 
 class HDF5Viewer(QMainWindow):
     def __init__(self, filename: str = None):
@@ -28,7 +27,7 @@ class HDF5Viewer(QMainWindow):
 
         # Initialize data
         self.data: HDF5Data = None
-        self.changes_made = False
+        self.modified_columns = {}
         self.dataFrame = pd.DataFrame()
         self.item = {}
 
@@ -73,9 +72,9 @@ class HDF5Viewer(QMainWindow):
         splitter.addWidget(tree_widget)
         splitter.addWidget(table_widget)
         splitter.addWidget(graph_widget)
-        splitter.setStretchFactor(0, 1)  # Relative stretch for Tree
-        splitter.setStretchFactor(1, 2)  # Relative stretch for Table
-        splitter.setStretchFactor(2, 1)  # Relative stretch for Plot
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(2, 1)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(5)
 
@@ -142,16 +141,15 @@ class HDF5Viewer(QMainWindow):
 
         if file_name:
             self.spinner.start()
-            self.data_loader_thread = HDF5DataLoaderThread(file_name)
-            self.data_loader_thread.data_loaded.connect(self.on_data_loaded)
-            self.data_loader_thread.error_occurred.connect(self.on_load_error)
-            self.data_loader_thread.start()
+            self.data = HDF5Data(file_name)
+            self.data.metadata_loaded.connect(self.on_metadata_loaded)
+            self.data.error_occurred.connect(self.on_load_error)
+            self.data.start()
 
-    def on_data_loaded(self, data: HDF5Data, file_path):
+    def on_metadata_loaded(self, metadata):
         self.spinner.stop()
-        self.data = data
-        self.tree.update_tree(self.data)
-        self.setWindowTitle(file_path)
+        self.tree.update_tree(metadata, self.data.filename)  # Pass the metadata to the tree
+
 
     def on_load_error(self, error):
         self.spinner.stop()
@@ -198,20 +196,33 @@ class HDF5Viewer(QMainWindow):
 
         current_name = model.headerData(column_index, Qt.Horizontal, Qt.DisplayRole)
 
-        new_name, ok = QInputDialog.getText(self, "Rename Column", f"Enter new name for column '{current_name}':")
+        # Get new column name
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Column", f"Enter new name for column '{current_name}':"
+        )
 
-        if ok and new_name.strip():
-            if model.setHeaderData(column_index, Qt.Horizontal, new_name.strip(), Qt.EditRole):
-                QMessageBox.information(self, "Success", f"Column name updated to '{new_name.strip()}'.")
-                self.changes_made = True
+        # If the user cancels or provides an empty name
+        if not ok or not new_name.strip():
+            return
 
-                # Update the DataFrame column name
-                self.dataFrame.rename(columns={current_name: new_name.strip()}, inplace=True)
+        new_name = new_name.strip()
 
-                # Refresh the table with updated DataFrame
-                self.fill_table()
-            else:
-                QMessageBox.warning(self, "Error", "Failed to update column name.")
+        # Check for duplicate column names
+        if new_name in self.dataFrame.columns:
+            QMessageBox.warning(
+                self, "Error", f"Column name '{new_name}' already exists. Choose a different name."
+            )
+            return
+
+        # Update the column name
+        if model.setHeaderData(column_index, Qt.Horizontal, new_name, Qt.EditRole):
+            QMessageBox.information(self, "Success", f"Column name updated to '{new_name}'.")
+            self.modified_columns[current_name] = new_name
+            self.dataFrame.rename(columns={current_name: new_name}, inplace=True)
+            # self.fill_table()
+
+        else:
+            QMessageBox.warning(self, "Error", "Failed to update column name.")
 
     def check_scroll_position(self):
         scroll_bar = self.table.verticalScrollBar()
@@ -244,36 +255,42 @@ class HDF5Viewer(QMainWindow):
     def update_content(self, item):
         try:
             # Handle unsaved changes
-            if self.changes_made:
+            if self.modified_columns:
                 reply = QMessageBox.question(
                     self,
                     "Save Changes",
                     "You have unsaved changes. Do you want to save them before switching?",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                )
+                    )
 
                 if reply == QMessageBox.Yes:
                     if hasattr(self, 'current_item') and self.current_item:
                         key_path = self.current_item.get('Path')
                         if key_path and not self.dataFrame.empty:
+                            self.spinner.start()
                             self.data.update_dataset(key_path, self.dataFrame)
-                    self.changes_made = False  # Reset changes flag
-                elif reply == QMessageBox.Cancel:
-                    return  # Cancel the switch
+                            self.modified_columns.clear()
+                            self.spinner.stop()
 
-            # Update the current item and load its data
+                elif reply == QMessageBox.No:
+                    for old_name, new_name in self.modified_columns.items():
+                        self.dataFrame.rename(columns={new_name: old_name}, inplace=True)
+                    self.modified_columns.clear()
+
+                elif reply == QMessageBox.Cancel:
+                    return
+
             self.item = item
             self.current_item = item
 
-            if item['Type'] != 'Group' and item['Type'] != 'File':
+            if item['Type'] != 'Group' and item['Type'] != 'File' and item['Type'] != None:
                 self.spinner.start()
                 try:
-                    # Use the backend to get the updated data for the item
-                    key_path = item.get('KeyPath')
+                    key_path = self.item.get('Path')
                     if key_path:
                         self.dataFrame = self.data.get_by_key(key_path)
                     else:
-                        self.dataFrame = pd.DataFrame(item['data'])
+                        self.dataFrame = pd.DataFrame(self.item['data'])
                     self.fill_table()
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to update content: {str(e)}")
@@ -282,38 +299,10 @@ class HDF5Viewer(QMainWindow):
         except Exception as e:
             print(f'Error doing update_content(): {e}')
 
-    def closeEvent(self, event):
-        if self.changes_made:
-            reply = QMessageBox.question(
-                self,
-                "Save Changes",
-                "You have unsaved changes. Do you want to save them before exiting?",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            )
-
-            if reply == QMessageBox.Yes:
-                self.save_changes()
-                event.accept()
-            elif reply == QMessageBox.No:
-                event.accept()
-            else:
-                event.ignore()
-        else:
-            event.accept()
-
-    def save_changes(self):
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save HDF5 File", "", "HDF5 Files (*.hdf5)")
-        if file_path:
-            try:
-                self.dataFrame.to_hdf(file_path, key='data', mode='w')
-                QMessageBox.information(self, "Success", f"Changes saved to {file_path}!")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to save changes: {str(e)}")
-
 
 if __name__ == '__main__':
-    profiler = cProfile.Profile()
-    profiler.enable()
+    # profiler = cProfile.Profile()
+    # profiler.enable()
     app = QApplication(sys.argv)
     try:
         if len(sys.argv) > 1:
@@ -326,7 +315,7 @@ if __name__ == '__main__':
     qt_material.apply_stylesheet(app, theme='light_blue.xml')
     viewer.show()
     exit_code = app.exec_()
-    profiler.disable()
-    stats = pstats.Stats(profiler).sort_stats(pstats.SortKey.TIME)
-    stats.dump_stats("profile_result.prof")
+    # profiler.disable()
+    # stats = pstats.Stats(profiler).sort_stats(pstats.SortKey.TIME)
+    # stats.dump_stats("profile_result.prof")
     sys.exit(exit_code)

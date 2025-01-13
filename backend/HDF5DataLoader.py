@@ -1,98 +1,106 @@
 import h5py
-import numpy as np
-from typing import Dict, List
 import pandas as pd
+from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtWidgets import QMessageBox
 
-class HDF5Data:
-    """
-    A class to encapsulate and interact with data loaded from an HDF5 file.
-    """
 
-    def __init__(self, filename = None):
+class HDF5Data(QThread):
+    metadata_loaded = pyqtSignal(dict)  # Emits metadata for the QTreeWidget
+    error_occurred = pyqtSignal(str)  # Emits error messages
+
+    def __init__(self, filename=None):
         """
-        Initialize the HDF5Data object by loading data from the given file.
+        Initialize the HDF5Data object.
 
         Args:
             filename (str): Path to the HDF5 file.
         """
+        super().__init__()
         self.filename = filename
-        if filename:
-            self.data = self._load_hdf5_data()
+        self.metadata = {}  # Store metadata here
 
-    def _load_hdf5_data(self):
-        """Load data from the HDF5 file and store it as a nested dictionary."""
+    def run(self):
+        """
+        Load the HDF5 file metadata in a separate thread.
+        """
+        try:
+            if not self.filename:
+                raise ValueError("Filename not provided.")
+            self.metadata = self._load_metadata()  # Store metadata
+            self.metadata_loaded.emit(self.metadata)  # Emit metadata to the app
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+    def _load_metadata(self):
+        """
+        Load metadata (groups and datasets) for the HDF5 file.
+
+        Returns:
+            dict: Metadata representing the structure of the HDF5 file.
+        """
+        metadata = {}
+
         with h5py.File(self.filename, 'r') as h5file:
-            return self._load_group(h5file, '/')
+            self._process_group(h5file, '/', metadata)
 
-    def _load_group(self, h5file, path):
-        """Recursively load the contents of an HDF5 group into a dictionary."""
-        result = {}
-        for key, item in h5file[path].items():
-            if isinstance(item, h5py.Dataset):
-                result[key] = self._process_dataset(item)
-            elif isinstance(item, h5py.Group):
-                result[key] = self._load_group(h5file, f"{path}{key}/")
-            else:
-                raise TypeError(f"Unsupported HDF5 item type for key '{key}': {type(item)}")
-        return result
+        return metadata
 
-    def _process_dataset(self, dataset):
-        """Process an HDF5 dataset into a Python-compatible object."""
-        if 'is_bytes' in dataset.attrs:
-            return dataset[()]
+    def _process_group(self, h5file, path, metadata):
+        """
+        Recursively process an HDF5 group to extract metadata.
 
-        if 'columns' in dataset.attrs:
-            # Reconstruct DataFrame using stored column names
-            columns = dataset.attrs['columns']
-            return pd.DataFrame(dataset[()], columns=columns)
+        Args:
+            h5file (h5py.File): Open HDF5 file object.
+            path (str): Current group path.
+            metadata (dict): Dictionary to store metadata.
+        """
+        for key in h5file[path].keys():
+            item_path = f"{path}{key}"
+            if isinstance(h5file[item_path], h5py.Group):
+                # Add group to metadata and recurse
+                metadata[key] = {"Type": "Group", "Path": item_path, "Children": {}}
+                self._process_group(h5file, f"{item_path}/", metadata[key]["Children"])
+            elif isinstance(h5file[item_path], h5py.Dataset):
+                # Add dataset to metadata
+                metadata[key] = {"Type": "Dataset", "Path": item_path}
 
-        if h5py.check_string_dtype(dataset.dtype):
-            data = dataset[()]
-            if isinstance(data, np.ndarray):
-                return data.astype(str)  # Convert arrays of bytes to strings
-            if isinstance(data, bytes):
-                return data.decode('utf-8')  # Convert single byte string
-            return data
+    def get_metadata(self):
+        """
+        Get the stored metadata.
 
-        return dataset[()]  # Handle numeric datasets (scalars or arrays)
-
-    def get_data(self):
-        """Get the entire loaded data as a dictionary."""
-        return self.data
+        Returns:
+            dict: The metadata dictionary.
+        """
+        if not self.metadata:
+            raise ValueError("Metadata has not been loaded yet.")
+        return self.metadata
 
     def get_by_key(self, key_path):
         """
-        Get a specific item from the data using a dot-separated key path.
+        Get a specific dataset or group from the HDF5 file by its key.
 
         Args:
-            key_path (str): Dot-separated path to the desired item (e.g., "group1.dataset1").
+            key_path (str): Full path to the dataset or group.
 
         Returns:
-            The requested data or None if the key path does not exist.
+            object: Dataset or group data.
         """
-        keys = key_path.split('.')
-        current = self.data
-        for key in keys:
-            if key in current:
-                current = current[key]
+        if not self.filename:
+            raise ValueError("Filename not provided.")
+
+        with h5py.File(self.filename, 'r') as h5file:
+            if key_path in h5file:
+                dataset = h5file[key_path]
+                if isinstance(dataset, h5py.Dataset):
+                    if 'columns' in dataset.attrs:
+                        columns = dataset.attrs['columns']
+                        return pd.DataFrame(dataset[()], columns=columns)
+                    return pd.DataFrame(dataset[()])  # Default DataFrame without column names
+                else:
+                    raise ValueError("Path does not point to a dataset.")
             else:
-                return None
+                raise KeyError(f"Key '{key_path}' not found in HDF5 file.")
 
-        if isinstance(current, pd.DataFrame):
-            return current
-        elif isinstance(current, np.ndarray):
-            # Reconstruct DataFrame if columns are available as attributes
-            with h5py.File(self.filename, 'r') as h5file:
-                dataset_path = '/' + '/'.join(keys)
-                if dataset_path in h5file and 'columns' in h5file[dataset_path].attrs:
-                    columns = h5file[dataset_path].attrs['columns']
-                    return pd.DataFrame(current, columns=columns)
-
-        return current
-
-    def __repr__(self):
-        """Provide a string representation of the loaded data for debugging."""
-        return f"HDF5Data(filename='{self.filename}', data_keys={list(self.data.keys())})"
 
     def update_dataset(self, key_path: str, data: pd.DataFrame):
         """
@@ -105,19 +113,18 @@ class HDF5Data:
         Raises:
             KeyError: If the dataset path does not exist in the HDF5 file.
         """
-        keys = key_path.split('.')
-        dataset_path = '/' + '/'.join(keys)
+        try:
+            keys = key_path.split('.')
+            dataset_path = '/' + '/'.join(keys)
 
-        with h5py.File(self.filename, 'a') as h5file:
-            if dataset_path not in h5file:
-                raise KeyError(f"Dataset '{dataset_path}' not found in HDF5 file.")
+            with h5py.File(self.filename, 'a') as h5file:
+                if dataset_path not in h5file:
+                    raise KeyError(f"Dataset '{dataset_path}' not found in HDF5 file.")
 
-            del h5file[dataset_path]
-            h5file.create_dataset(dataset_path, data=data.to_numpy())
+                del h5file[dataset_path]
+                h5file.create_dataset(dataset_path, data=data.to_numpy())
 
-            h5file[dataset_path].attrs['columns'] = data.columns.tolist()
+                h5file[dataset_path].attrs['columns'] = data.columns.tolist()
 
-        current = self.data
-        for key in keys[:-1]:
-            current = current[key]
-        current[keys[-1]] = data
+        except Exception as e:
+            QMessageBox.Warning('update_dataset failed', str(e))
