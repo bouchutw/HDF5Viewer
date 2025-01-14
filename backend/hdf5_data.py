@@ -3,6 +3,8 @@ import pandas as pd
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import QMessageBox
 
+from backend.dataset_model import DatasetModel
+
 
 class HDF5Data(QThread):
     metadata_loaded = pyqtSignal(dict)  # Emits metadata for the QTreeWidget
@@ -87,22 +89,21 @@ class HDF5Data(QThread):
         """
         if not self.filename:
             raise ValueError("Filename not provided.")
-
         with h5py.File(self.filename, 'r') as h5file:
             if key_path in h5file:
                 dataset = h5file[key_path]
                 if isinstance(dataset, h5py.Dataset):
                     if 'columns' in dataset.attrs:
                         columns = dataset.attrs['columns']
-                        return pd.DataFrame(dataset[()], columns=columns)
-                    return pd.DataFrame(dataset[()])  # Default DataFrame without column names
+                        return DatasetModel(key_path, pd.DataFrame(dataset[()], columns=columns))
+                    return DatasetModel(key_path, pd.DataFrame(dataset[()]))
                 else:
                     raise ValueError("Path does not point to a dataset.")
             else:
                 raise KeyError(f"Key '{key_path}' not found in HDF5 file.")
 
 
-    def update_dataset(self, key_path: str, data: pd.DataFrame):
+    def update_dataset(self, datasetModel: DatasetModel):
         """
         Update a specific dataset in the HDF5 file and in the in-memory data.
 
@@ -114,7 +115,7 @@ class HDF5Data(QThread):
             KeyError: If the dataset path does not exist in the HDF5 file.
         """
         try:
-            keys = key_path.split('.')
+            keys = datasetModel.keypath.split('.')
             dataset_path = '/' + '/'.join(keys)
 
             with h5py.File(self.filename, 'a') as h5file:
@@ -122,9 +123,9 @@ class HDF5Data(QThread):
                     raise KeyError(f"Dataset '{dataset_path}' not found in HDF5 file.")
 
                 del h5file[dataset_path]
-                h5file.create_dataset(dataset_path, data=data.to_numpy())
+                h5file.create_dataset(dataset_path, data=datasetModel.dataFrame.to_numpy())
 
-                h5file[dataset_path].attrs['columns'] = data.columns.tolist()
+                h5file[dataset_path].attrs['columns'] = datasetModel.dataFrame.columns.tolist()
 
         except Exception as e:
             QMessageBox.Warning('update_dataset failed', str(e))
